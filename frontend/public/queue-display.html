@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Queue Display</title>
+  <style>
+    :root { --ok:#10b981; --warn:#f59e0b; --bad:#ef4444; --fg:#0f172a; }
+    html, body { margin:0; padding:0; height:100%; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: var(--fg); }
+    .wrap { display:flex; flex-direction:column; gap:16px; padding:24px; max-width: 1080px; margin: 0 auto; }
+    .hdr { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .title { font-size: 22px; font-weight: 700; }
+    .pill { font-size: 12px; padding: 6px 10px; border-radius: 999px; background: #eef2ff; color:#3730a3; }
+    .card { border:1px solid #e5e7eb; border-radius: 16px; padding: 16px; background:#fff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+    .grid { display:grid; grid-template-columns: 2fr 1fr; gap:16px; }
+    .current { font-size: 80px; font-weight: 800; letter-spacing: 2px; }
+    .name { font-size: 28px; font-weight: 600; margin-top: 8px; }
+    .row { display:flex; align-items:center; gap:12px; }
+    .stat { font-size:14px; color:#334155; }
+    .timer { font-size: 40px; font-weight: 700; }
+    .timer.ok { color: var(--ok); }
+    .timer.warn { color: var(--bad); }
+    .muted { color:#64748b; font-size:14px; }
+    .next { font-size: 36px; font-weight: 700; }
+    .footer { display:flex; align-items:center; justify-content:space-between; }
+    .pre { background:#fff7ed; border-color:#fed7aa; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <!-- Selector Panel -->
+    <div id="selectorPanel" class="card" style="display:none;">
+      <div class="hdr" style="margin-bottom:8px;">
+        <div class="title">Select Branch and Counter</div>
+      </div>
+      <div class="row" style="flex-wrap:wrap; gap:12px;">
+        <div>
+          <div class="muted">Branch</div>
+          <select id="branchSelect" style="min-width:260px; padding:8px; border:1px solid #e5e7eb; border-radius:8px;"></select>
+        </div>
+        <div>
+          <div class="muted">Counter</div>
+          <select id="counterSelect" style="min-width:220px; padding:8px; border:1px solid #e5e7eb; border-radius:8px;"></select>
+        </div>
+        <div>
+          <div class="muted">Date (UTC day)</div>
+          <input id="dateInput" type="date" style="padding:8px; border:1px solid #e5e7eb; border-radius:8px;" />
+        </div>
+        <div style="align-self:end;">
+          <button id="loadSessionBtn" style="padding:10px 14px; border-radius:10px; background:#2563eb; color:white; border:none;">Load Session</button>
+        </div>
+      </div>
+      <div id="selectorMsg" class="stat" style="margin-top:8px;"></div>
+    </div>
+    <div class="hdr">
+      <div class="title">Queue Display</div>
+      <div id="slotPill" class="pill">Idle</div>
+    </div>
+
+    <div id="prestartCard" class="card pre" style="display:none;">
+      <div class="row">
+        <div class="stat">Waiting for slot to start…</div>
+        <div id="slotWindow" class="pill"></div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="muted">Now Serving</div>
+        <div id="currentToken" class="current">—</div>
+        <div id="currentName" class="name">—</div>
+      </div>
+      <div class="card">
+        <div class="muted">Time Left</div>
+        <div id="timer" class="timer">—</div>
+        <div class="muted" id="target"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="muted">Next</div>
+      <div id="nextToken" class="next">—</div>
+      <div id="nextName" class="stat">—</div>
+    </div>
+
+    <div class="footer">
+      <div class="stat">Waiting: <span id="waitingCount">0</span> · Served: <span id="servedCount">0</span></div>
+      <div class="stat">Avg Service: <span id="avgService">—</span></div>
+    </div>
+  </div>
+
+  <!-- Socket.IO client from backend -->
+  <script>
+    // Compute API base from query (host param) or current origin
+    const params = new URLSearchParams(window.location.search);
+    const hostParam = params.get('host') || null;
+    const API_HTTP_BASE = hostParam ? (location.protocol + '//' + hostParam) : (location.origin);
+
+    // Basic time formatters
+    function fmtMs(ms){
+      if (ms == null) return '—';
+      const s = Math.floor(ms/1000);
+      const m = Math.floor(s/60);
+      const r = s % 60;
+      return `${m}m ${String(r).padStart(2,'0')}s`;
+    }
+    function fmtHM(t){ try{ return new Date(t).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});}catch{return '—'} }
+
+    // Read params
+    const qs = new URLSearchParams(window.location.search);
+    const WS_URL = qs.get('ws') || (location.protocol.replace('http','ws') + '//' + (qs.get('host') || 'localhost:5000'));
+    let sessionId = qs.get('sessionId');
+    let counterId = qs.get('counterId');
+
+    function setText(id, v){ const el = document.getElementById(id); if (el) el.textContent = v; }
+
+    function applyState(state){
+      // slot
+      const slot = state?.slot || { state:'idle' };
+      const slotPill = document.getElementById('slotPill');
+      const pre = document.getElementById('prestartCard');
+      const slotWindow = document.getElementById('slotWindow');
+      slotPill.textContent = `Slot: ${slot.state}`;
+      if (slot?.startTime && slot?.endTime){ slotWindow.style.display = 'inline-block'; slotWindow.textContent = `${fmtHM(slot.startTime)} – ${fmtHM(slot.endTime)}`; } else { slotWindow.style.display='none'; }
+      pre.style.display = (slot.state === 'prestart') ? 'block' : 'none';
+
+      // current
+      const cur = state?.current;
+      setText('currentToken', cur?.tokenNo || '—');
+      setText('currentName', cur?.name || '—');
+      const timerEl = document.getElementById('timer');
+      if (cur?.timerRemainingMs != null){
+        timerEl.textContent = fmtMs(cur.timerRemainingMs);
+        timerEl.className = 'timer ' + (cur.timerRemainingMs > (cur.timerTargetMs||0)/2 ? 'ok' : 'warn');
+      } else { timerEl.textContent = '—'; timerEl.className = 'timer'; }
+      setText('target', cur?.timerTargetMs ? `target ${fmtMs(cur.timerTargetMs)}` : '');
+
+      // next
+      const nxt = state?.next;
+      setText('nextToken', nxt?.tokenNo || '—');
+      setText('nextName', nxt?.name || '—');
+
+      // footer
+      setText('waitingCount', state?.queue?.waitingCount ?? 0);
+      setText('servedCount', state?.queue?.servedCount ?? 0);
+      setText('avgService', state?.queue?.avgServiceSec != null ? fmtMs((state.queue.avgServiceSec||0)*1000) : '—');
+    }
+
+    // Simple fetch helper
+    async function fetchJSON(url){
+      const res = await fetch(url, { credentials: 'include' });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    // Branch/Counter selector logic
+    async function initSelector(){
+      const selector = document.getElementById('selectorPanel');
+      const branchSel = document.getElementById('branchSelect');
+      const counterSel = document.getElementById('counterSelect');
+      const dateInput = document.getElementById('dateInput');
+      const loadBtn = document.getElementById('loadSessionBtn');
+      const msg = document.getElementById('selectorMsg');
+
+      // Default date = today (UTC)
+      const todayUtc = new Date();
+      const y = todayUtc.getUTCFullYear();
+      const m = String(todayUtc.getUTCMonth()+1).padStart(2,'0');
+      const d = String(todayUtc.getUTCDate()).padStart(2,'0');
+      dateInput.value = `${y}-${m}-${d}`;
+
+      // Load branches and populate
+      try{
+        const branches = await fetchJSON(`${API_HTTP_BASE}/api/branches`);
+        branchSel.innerHTML = branches.map(b => `<option value="${b._id}">${b.name || b._id}</option>`).join('');
+        function populateCounters(){
+          const b = branches.find(x => String(x._id) === String(branchSel.value));
+          const counters = b?.counters || [];
+          counterSel.innerHTML = counters.map(c => `<option value="${c._id}">${c.name || c._id}</option>`).join('');
+        }
+        branchSel.onchange = populateCounters;
+        populateCounters();
+      }catch(e){ msg.textContent = `Failed to load branches: ${e.message}`; }
+
+      loadBtn.onclick = async () => {
+        msg.textContent = 'Finding session…';
+        try {
+          const b = branchSel.value;
+          const c = counterSel.value;
+          const date = dateInput.value;
+          const sessions = await fetchJSON(`${API_HTTP_BASE}/api/sessions?branchId=${encodeURIComponent(b)}&counterId=${encodeURIComponent(c)}&date=${encodeURIComponent(date)}`);
+          if (!Array.isArray(sessions) || sessions.length === 0){
+            msg.textContent = 'No session found for selected branch/counter/date. Please start a session in CCO dashboard.';
+            return;
+          }
+          const s = sessions[0];
+          sessionId = s._id || s.id;
+          counterId = c;
+          msg.textContent = 'Connected to session.';
+          // Update URL for shareability
+          const p = new URLSearchParams(window.location.search);
+          p.set('sessionId', sessionId);
+          p.set('counterId', counterId);
+          history.replaceState({}, '', `${location.pathname}?${p.toString()}`);
+          // Subscribe via socket if connected
+          if (window.__socket){
+            window.__socket.emit('subscribeDisplay', { sessionId, counterId });
+          }
+          // Hide selector
+          selector.style.display = 'none';
+        } catch(e){ msg.textContent = `Error: ${e.message}`; }
+      };
+
+      selector.style.display = (!sessionId || !counterId) ? 'block' : 'none';
+    }
+
+    // Initialize selector immediately
+    initSelector().catch(()=>{});
+
+    // Load socket.io client dynamically from backend to avoid bundling
+    (function(){
+      const s = document.createElement('script');
+      const httpUrl = WS_URL.replace('ws://','http://').replace('wss://','https://');
+      s.src = httpUrl + '/socket.io/socket.io.js';
+      s.onload = () => {
+        const socket = io(httpUrl, { transports: ['websocket'], query: { sessionId, counterId } });
+        window.__socket = socket;
+        socket.on('connect', () => {
+          if (!(sessionId && counterId)) {
+            console.warn('Missing sessionId/counterId in URL query');
+          } else {
+            socket.emit('subscribeDisplay', { sessionId, counterId });
+          }
+        });
+        socket.on('display:update', (payload) => {
+          applyState(payload);
+        });
+      };
+      document.head.appendChild(s);
+    })();
+  </script>
+</body>
+</html>

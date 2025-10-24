@@ -1,0 +1,56 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Ignore Vite/React cache and temp folders
+clean/
+clean/_logs/
+clean/_cacache/
+clean/_npx/
+clean/_npx/*/package-lock.json
+clean/_npx/*/node_modules/
+
+# Ignore public build artifacts
+public/*.svg
+
+# Ignore IDE and OS files
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+.png
+*.jpg
+*.jpeg
+*.gif   
+*.bmp
+ 
+# Runtime uploads and other generated files
+uploads/
+
