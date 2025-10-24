@@ -99,7 +99,7 @@ mv frontend/dist/* ./
    ```
    NODE_ENV = production
    PORT = (leave empty - cPanel assigns automatically)
-   MONGO_URI = mongodb+srv://username:password@cluster.mongodb.net/servSync
+   MONGO_URI = mongodb+srv://<username>:<password>@cluster.mongodb.net/servSync
    SESSION_SECRET = your_super_secure_session_secret_here_32_chars
    FRONTEND_ORIGIN = https://yourdomain.com
    NOTIFYLK_USER_ID = your_sms_user_id
